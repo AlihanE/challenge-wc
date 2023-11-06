@@ -15,22 +15,33 @@ func main() {
 		errorExit(errC)
 	}
 
-	if len(os.Args) < 3 {
-		errorExit(errC)
-	}
+	if strings.Contains(os.Args[1], "-") {
+		f := openFile(os.Args[2])
+		defer f.Close()
 
-	f := openFile(os.Args[2])
-	defer f.Close()
-
-	switch os.Args[1] {
-	case "-c":
-		c(f)
-	case "-l":
-		l(f)
-	case "-w":
-		w(f)
-	case "-m":
-		m(f)
+		switch os.Args[1] {
+		case "-c":
+			fmt.Println(c(f), os.Args[2])
+		case "-l":
+			resCh, inCh := l()
+			go readFile(f, inCh)
+			fmt.Println(<-resCh, os.Args[2])
+		case "-w":
+			resCh, inCh := w()
+			go readFile(f, inCh)
+			fmt.Println(<-resCh, os.Args[2])
+		case "-m":
+			fmt.Println(m(os.Args[2]), os.Args[2])
+		}
+	} else {
+		f := openFile(os.Args[1])
+		defer f.Close()
+		lResCh, lInCh := l()
+		wResCh, wInCh := w()
+		go readFile(f, lInCh, wInCh)
+		lines := <-lResCh
+		words := <-wResCh
+		fmt.Println(lines, words, c(f), os.Args[1])
 	}
 }
 
@@ -39,45 +50,52 @@ func errorExit(args ...any) {
 	os.Exit(1)
 }
 
-func c(f *os.File) {
+func c(f *os.File) int64 {
 	s, err := f.Stat()
 	if err != nil {
 		errorExit(errFile, err)
 	}
 
-	fmt.Println(s.Size(), f.Name())
+	return s.Size()
 }
 
-func l(f *os.File) {
-	scanner := bufio.NewScanner(f)
+func l() (chan int, chan string) {
 	i := 0
-	for scanner.Scan() {
-		i++
-	}
+	resCh := make(chan int)
+	inCh := make(chan string)
 
-	fmt.Println(i, f.Name())
+	go func() {
+		for range inCh {
+			i++
+		}
+		resCh <- i
+	}()
+
+	return resCh, inCh
 }
 
-func w(f *os.File) {
-	scanner := bufio.NewScanner(f)
+func w() (chan int, chan string) {
 	i := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		i += len(strings.Fields(line))
-	}
+	resCh := make(chan int)
+	inCh := make(chan string)
 
-	fmt.Println(i, f.Name())
+	go func() {
+		for line := range inCh {
+			i += len(strings.Fields(line))
+		}
+		resCh <- i
+	}()
+
+	return resCh, inCh
 }
 
-func m(f *os.File) {
-	scanner := bufio.NewScanner(f)
-	i := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		i += strings.Count(line, "")
+func m(fileName string) int {
+	b, err := os.ReadFile(fileName)
+	if err != nil {
+		errorExit(errFile, err)
 	}
 
-	fmt.Println(i, f.Name())
+	return len([]rune(string(b)))
 }
 
 func openFile(fileName string) (file *os.File) {
@@ -87,4 +105,17 @@ func openFile(fileName string) (file *os.File) {
 	}
 
 	return
+}
+
+func readFile(f *os.File, chans ...chan<- string) {
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		for _, ch := range chans {
+			ch <- scanner.Text()
+		}
+	}
+
+	for _, ch := range chans {
+		close(ch)
+	}
 }
